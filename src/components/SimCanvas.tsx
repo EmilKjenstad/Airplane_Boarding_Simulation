@@ -33,7 +33,7 @@ export default function SimCanvas({ simConfig, running, resetKey, onComplete, on
 
     const canvas = canvasRef.current;
     if (canvas) {
-      const { w, h } = canvasDimensions(simConfig.plane.rows, simConfig.plane.seatsPerSide);
+      const { w, h } = canvasDimensions(simConfig.plane.rows, simConfig.plane.seatGroups);
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d');
@@ -91,7 +91,7 @@ export default function SimCanvas({ simConfig, running, resetKey, onComplete, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
-  const { w, h } = canvasDimensions(simConfig.plane.rows, simConfig.plane.seatsPerSide);
+  const { w, h } = canvasDimensions(simConfig.plane.rows, simConfig.plane.seatGroups);
 
   return (
     <canvas

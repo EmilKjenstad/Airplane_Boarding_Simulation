@@ -1,4 +1,5 @@
 import type { SimSnapshot } from './simulation/types';
+import { totalCols, groupStartCol } from './simulation/helpers';
 
 const CELL = 26;
 const AISLE = 20;
@@ -16,25 +17,32 @@ const COLOR = {
   rowLabel: '#475569',
 };
 
-export function canvasDimensions(rows: number, seatsPerSide: number) {
-  const w = PAD * 2 + seatsPerSide * 2 * CELL + AISLE;
-  const h = PAD * 2 + rows * CELL;
-  return { w, h };
+/** X pixel offset of the start of group g (left edge of first seat in that group). */
+function groupOffsetX(groups: number[], g: number): number {
+  return PAD + groupStartCol(groups, g) * CELL + g * AISLE;
 }
 
-function seatCenterX(col: number, seatsPerSide: number): number {
-  if (col < seatsPerSide) {
-    return PAD + col * CELL + CELL / 2;
+/** Center X of a seat column. */
+function seatCenterX(col: number, groups: number[]): number {
+  let cumCols = 0;
+  for (let g = 0; g < groups.length; g++) {
+    if (col < cumCols + groups[g]) {
+      const colInGroup = col - cumCols;
+      return groupOffsetX(groups, g) + colInGroup * CELL + CELL / 2;
+    }
+    cumCols += groups[g];
   }
-  return PAD + seatsPerSide * CELL + AISLE + (col - seatsPerSide) * CELL + CELL / 2;
+  return PAD + col * CELL + CELL / 2;
+}
+
+/** Center X of aisle i (the aisle between group i and group i+1). */
+function aisleCenterX(aisleIdx: number, groups: number[]): number {
+  // Aisle starts right after group aisleIdx ends
+  return groupOffsetX(groups, aisleIdx) + groups[aisleIdx] * CELL + AISLE / 2;
 }
 
 function rowCenterY(row: number): number {
   return PAD + row * CELL + CELL / 2;
-}
-
-function aisleCenterX(seatsPerSide: number): number {
-  return PAD + seatsPerSide * CELL + AISLE / 2;
 }
 
 function roundRect(
@@ -58,32 +66,43 @@ function roundRect(
   ctx.closePath();
 }
 
+export function canvasDimensions(rows: number, groups: number[]) {
+  const numAisles = Math.max(0, groups.length - 1);
+  const w = PAD * 2 + totalCols(groups) * CELL + numAisles * AISLE;
+  const h = PAD * 2 + rows * CELL;
+  return { w, h };
+}
+
 export function renderFrame(
   ctx: CanvasRenderingContext2D,
   snapshot: SimSnapshot,
 ): void {
   const { passengers, config } = snapshot;
-  const { rows, seatsPerSide } = config;
-  const { w, h } = canvasDimensions(rows, seatsPerSide);
+  const { rows, seatGroups } = config;
+  const numAisles = Math.max(0, seatGroups.length - 1);
+  const { w, h } = canvasDimensions(rows, seatGroups);
 
   // Background
   ctx.fillStyle = COLOR.bg;
   ctx.fillRect(0, 0, w, h);
 
-  // Aisle background
-  ctx.fillStyle = COLOR.aisleBg;
-  ctx.fillRect(PAD + seatsPerSide * CELL, PAD, AISLE, rows * CELL);
+  // Draw aisle backgrounds and entry arrows
+  for (let ai = 0; ai < numAisles; ai++) {
+    const ax = groupOffsetX(seatGroups, ai) + seatGroups[ai] * CELL;
+    ctx.fillStyle = COLOR.aisleBg;
+    ctx.fillRect(ax, PAD, AISLE, rows * CELL);
 
-  // Entry arrow at top of aisle
-  ctx.fillStyle = '#334155';
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('▼', aisleCenterX(seatsPerSide), PAD - 6);
+    ctx.fillStyle = '#334155';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('▼', aisleCenterX(ai, seatGroups), PAD - 6);
+  }
 
   // Draw all seats (empty)
+  const cols = totalCols(seatGroups);
   for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < seatsPerSide * 2; col++) {
-      const cx = seatCenterX(col, seatsPerSide);
+    for (let col = 0; col < cols; col++) {
+      const cx = seatCenterX(col, seatGroups);
       const cy = rowCenterY(row);
       ctx.fillStyle = COLOR.seatEmpty;
       roundRect(ctx, cx - CELL / 2 + 2, cy - CELL / 2 + 2, CELL - 4, CELL - 4, SEAT_CORNER);
@@ -91,10 +110,10 @@ export function renderFrame(
     }
   }
 
-  // Draw seated passengers (override seat color)
+  // Draw seated passengers over their seats
   for (const p of passengers) {
     if (p.state === 'seated') {
-      const cx = seatCenterX(p.seat.col, seatsPerSide);
+      const cx = seatCenterX(p.seat.col, seatGroups);
       const cy = rowCenterY(p.seat.row);
       ctx.fillStyle = COLOR.seatOccupied;
       roundRect(ctx, cx - CELL / 2 + 2, cy - CELL / 2 + 2, CELL - 4, CELL - 4, SEAT_CORNER);
@@ -113,7 +132,7 @@ export function renderFrame(
   // Draw passengers in the aisle (aisle + stowing states)
   for (const p of passengers) {
     if (p.state === 'aisle' || p.state === 'stowing') {
-      const cx = aisleCenterX(seatsPerSide);
+      const cx = aisleCenterX(p.aisleIndex, seatGroups);
       const cy = rowCenterY(p.aisleRow);
       ctx.fillStyle = p.state === 'stowing' ? COLOR.passengerStowing : COLOR.passengerAisle;
       ctx.beginPath();

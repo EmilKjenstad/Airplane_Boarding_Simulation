@@ -1,8 +1,8 @@
 import type { Passenger, SimConfig, SimMetrics, SimSnapshot } from './types';
 import { generateBoardingOrder } from './strategies';
+import { totalCols, colToAisle } from './helpers';
 
 function gaussianRandom(mean: number, stdDev: number): number {
-  // Box-Muller transform
   const u1 = Math.random() || 1e-10;
   const u2 = Math.random();
   const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
@@ -12,8 +12,10 @@ function gaussianRandom(mean: number, stdDev: number): number {
 export class SimEngine {
   private config: SimConfig;
   private passengers: Passenger[];
-  private queue: Passenger[];
-  private aisleOccupancy: Map<number, Passenger>;
+  /** Per-aisle boarding queue — passengers sorted by boardingOrder wait here. */
+  private aisleQueues: Passenger[][];
+  /** Per-aisle row occupancy — key = row index, value = passenger blocking that row. */
+  private aisleOccupancy: Map<number, Passenger>[];
   private currentTick = 0;
   private aisleBlockEvents = 0;
   public done = false;
@@ -21,16 +23,19 @@ export class SimEngine {
   constructor(config: SimConfig) {
     this.config = config;
     const { plane, stowMean, stowStdDev } = config;
+    const numAisles = Math.max(1, plane.seatGroups.length - 1);
+    const cols = totalCols(plane.seatGroups);
 
     // Build all passengers
     this.passengers = [];
     let id = 0;
     for (let row = 0; row < plane.rows; row++) {
-      for (let col = 0; col < plane.seatsPerSide * 2; col++) {
+      for (let col = 0; col < cols; col++) {
         this.passengers.push({
           id: id++,
           seat: { row, col },
           state: 'queued',
+          aisleIndex: colToAisle(col, plane.seatGroups),
           aisleRow: -1,
           stowTicksRemaining: gaussianRandom(stowMean, stowStdDev),
           boardingOrder: 0,
@@ -40,7 +45,7 @@ export class SimEngine {
       }
     }
 
-    // Apply boarding strategy
+    // Apply boarding strategy and assign boarding order
     const ordered = generateBoardingOrder(
       this.passengers,
       config.strategy,
@@ -49,56 +54,66 @@ export class SimEngine {
     );
     ordered.forEach((p, i) => { p.boardingOrder = i; });
 
-    this.queue = [...ordered];
-    this.aisleOccupancy = new Map();
+    // Split ordered queue into per-aisle queues (preserving relative boarding order)
+    this.aisleQueues = Array.from({ length: numAisles }, () => []);
+    for (const p of ordered) {
+      this.aisleQueues[p.aisleIndex].push(p);
+    }
+
+    this.aisleOccupancy = Array.from({ length: numAisles }, () => new Map<number, Passenger>());
   }
 
   step(): void {
     if (this.done) return;
     this.currentTick++;
 
-    // 1. Process stowing passengers — decrement timer, seat when done
-    for (const p of this.passengers) {
-      if (p.state === 'stowing') {
-        p.stowTicksRemaining--;
-        if (p.stowTicksRemaining <= 0) {
-          p.state = 'seated';
-          p.seatedTick = this.currentTick;
-          this.aisleOccupancy.delete(p.aisleRow);
-          p.aisleRow = -1;
+    const numAisles = this.aisleOccupancy.length;
+
+    for (let ai = 0; ai < numAisles; ai++) {
+      const occupancy = this.aisleOccupancy[ai];
+
+      // 1. Decrement stowing timers; seat passengers whose timer reached zero
+      for (const p of this.passengers) {
+        if (p.state === 'stowing' && p.aisleIndex === ai) {
+          p.stowTicksRemaining--;
+          if (p.stowTicksRemaining <= 0) {
+            p.state = 'seated';
+            p.seatedTick = this.currentTick;
+            occupancy.delete(p.aisleRow);
+            p.aisleRow = -1;
+          }
         }
       }
-    }
 
-    // 2. Move aisle passengers toward their seat (highest row first = front of plane moves first)
-    const aislePassengers = this.passengers
-      .filter(p => p.state === 'aisle')
-      .sort((a, b) => b.aisleRow - a.aisleRow);
+      // 2. Move aisle passengers forward (process front-of-plane first to avoid chain blocks)
+      const moving = this.passengers
+        .filter(p => p.state === 'aisle' && p.aisleIndex === ai)
+        .sort((a, b) => b.aisleRow - a.aisleRow);
 
-    for (const p of aislePassengers) {
-      if (p.aisleRow === p.seat.row) {
-        // Arrived at seat row — start stowing (stays in aisleOccupancy while stowing)
-        p.state = 'stowing';
-      } else {
-        const nextRow = p.aisleRow + 1;
-        if (!this.aisleOccupancy.has(nextRow)) {
-          this.aisleOccupancy.delete(p.aisleRow);
-          p.aisleRow = nextRow;
-          this.aisleOccupancy.set(nextRow, p);
+      for (const p of moving) {
+        if (p.aisleRow === p.seat.row) {
+          p.state = 'stowing';
         } else {
-          // Blocked
-          this.aisleBlockEvents++;
+          const nextRow = p.aisleRow + 1;
+          if (!occupancy.has(nextRow)) {
+            occupancy.delete(p.aisleRow);
+            p.aisleRow = nextRow;
+            occupancy.set(nextRow, p);
+          } else {
+            this.aisleBlockEvents++;
+          }
         }
       }
-    }
 
-    // 3. Let the next queued passenger enter if row 0 is free
-    if (this.queue.length > 0 && !this.aisleOccupancy.has(0)) {
-      const p = this.queue.shift()!;
-      p.state = 'aisle';
-      p.aisleRow = 0;
-      p.enteredAisleTick = this.currentTick;
-      this.aisleOccupancy.set(0, p);
+      // 3. Admit next queued passenger into this aisle if row 0 is free
+      const queue = this.aisleQueues[ai];
+      if (queue.length > 0 && !occupancy.has(0)) {
+        const p = queue.shift()!;
+        p.state = 'aisle';
+        p.aisleRow = 0;
+        p.enteredAisleTick = this.currentTick;
+        occupancy.set(0, p);
+      }
     }
 
     this.done = this.passengers.every(p => p.state === 'seated');
@@ -132,7 +147,7 @@ export class SimEngine {
 /** Run a simulation to completion without animation — used for comparison charts. */
 export function runHeadless(config: SimConfig): SimMetrics {
   const engine = new SimEngine(config);
-  const maxTicks = config.plane.rows * config.plane.seatsPerSide * 2 * 200;
+  const maxTicks = config.plane.rows * config.plane.seatGroups.reduce((a, b) => a + b, 0) * 200;
   let guard = 0;
   while (!engine.done && guard < maxTicks) {
     engine.step();

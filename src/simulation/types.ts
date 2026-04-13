@@ -17,6 +17,7 @@ export interface Passenger {
   id: number;
   seat: SeatPosition;
   state: PassengerState;
+  aisleIndex: number;         // which aisle this passenger uses
   aisleRow: number;          // current row in the aisle (-1 if not yet entered)
   stowTicksRemaining: number; // pre-assigned stow time
   boardingOrder: number;     // position in boarding queue (0 = first)
@@ -26,7 +27,8 @@ export interface Passenger {
 
 export interface PlaneConfig {
   rows: number;
-  seatsPerSide: number; // seats on each side of the aisle (e.g. 3 gives 3+3=6 per row)
+  /** Seat counts per group — aisles are inferred between groups. E.g. [3,3], [2,4,2], [1,2]. */
+  seatGroups: number[];
 }
 
 export interface SimConfig {

@@ -18,7 +18,7 @@ const ALL_STRATEGIES: StrategyName[] = [
 
 export default function App() {
   const [rows, setRows] = useState(DEFAULT_SIM_CONFIG.plane.rows);
-  const [seatsPerSide, setSeatsPerSide] = useState(DEFAULT_SIM_CONFIG.plane.seatsPerSide);
+  const [seatGroups, setSeatGroups] = useState<number[]>(DEFAULT_SIM_CONFIG.plane.seatGroups);
   const [strategy, setStrategy] = useState<StrategyName>(DEFAULT_SIM_CONFIG.strategy);
   const [ticksPerSecond, setTicksPerSecond] = useState(DEFAULT_SIM_CONFIG.ticksPerSecond);
   const [stowMean, setStowMean] = useState(DEFAULT_SIM_CONFIG.stowMean);
@@ -38,10 +38,10 @@ export default function App() {
     setDone(false);
     setCurrentMetric(null);
     setResetKey(k => k + 1);
-  }, [rows, seatsPerSide, strategy, stowMean, stowStdDev, customZoneOrder]);
+  }, [rows, seatGroups, strategy, stowMean, stowStdDev, customZoneOrder]);
 
   const simConfig: SimConfig = {
-    plane: { rows, seatsPerSide },
+    plane: { rows, seatGroups },
     strategy,
     ticksPerSecond,
     stowMean,
@@ -87,7 +87,7 @@ export default function App() {
       >
         <ControlPanel
           rows={rows}
-          seatsPerSide={seatsPerSide}
+          seatGroups={seatGroups}
           strategy={strategy}
           ticksPerSecond={ticksPerSecond}
           stowMean={stowMean}
@@ -96,7 +96,7 @@ export default function App() {
           running={running}
           done={done}
           onRowsChange={setRows}
-          onSeatsPerSideChange={setSeatsPerSide}
+          onSeatGroupsChange={setSeatGroups}
           onStrategyChange={setStrategy}
           onTicksPerSecondChange={setTicksPerSecond}
           onStowMeanChange={setStowMean}
